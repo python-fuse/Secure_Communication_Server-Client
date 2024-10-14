@@ -1,7 +1,8 @@
+import base64
 import socket
-from Cryptodome.PublicKey import RSA
-from Cryptodome.Cipher import AES, PKCS1_OAEP
-from Cryptodome.Random import get_random_bytes
+from Crypto.PublicKey import RSA
+from Crypto.Cipher import AES, PKCS1_OAEP
+from Crypto.Random import get_random_bytes
 
 """
 This module implements a simple server that uses RSA and AES encryption to securely receive and decrypt messages.
@@ -21,26 +22,37 @@ Functions:
 """
 
 
-def generate_rsa_keys() -> tuple[bytes, bytes]:
+def generate_rsa_keys():
     key = RSA.generate(2048)
     private_key = key.export_key()
     public_key = key.publickey().export_key()
     return private_key, public_key
 
 
-def decrypt_aes_key(enc_session_key, private_key) -> bytes:
+def decrypt_aes_key(enc_session_key, private_key):
     rsa_key = RSA.import_key(private_key)
     cipher_rsa = PKCS1_OAEP.new(rsa_key)
     return cipher_rsa.decrypt(enc_session_key)
 
 
-def decrypt_message(enc_message, session_key) -> str:
-    cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce=enc_message[:16])
-    data = cipher_aes.decrypt_and_verify(enc_message[16:-16], enc_message[-16:])
-    return data.decode()
+def decrypt_message(enc_message, session_key):
+    try:
+        nonce = enc_message[:16]
+        ciphertext = enc_message[16:-16]
+        tag = enc_message[-16:]
+        cipher_aes = AES.new(session_key, AES.MODE_EAX, nonce=nonce)
+        data = cipher_aes.decrypt_and_verify(ciphertext, tag)
+        return data.decode()
+    except ValueError as e:
+        print(f"Decryption error: {e}")
+        print(f"Encrypted message length: {len(enc_message)}")
+        print(f"Nonce: {base64.b64encode(nonce).decode()}")
+        print(f"Ciphertext: {base64.b64encode(ciphertext).decode()}")
+        print(f"Tag: {base64.b64encode(tag).decode()}")
+        return None
 
 
-def start_server() -> None:
+def start_server():
     private_key, public_key = generate_rsa_keys()
 
     server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -49,18 +61,30 @@ def start_server() -> None:
 
     print("Server is listening...")
 
-    conn, address = server_socket.accept()
-    print(f"Connection from {address}")
+    conn, addr = server_socket.accept()
+    print(f"Connection from: {addr}")
 
+    # Send public key to client
     conn.send(public_key)
 
+    # Receive encrypted session key and message
     enc_session_key = conn.recv(256)
     enc_message = conn.recv(1024)
 
+    print(f"Received encrypted session key length: {len(enc_session_key)}")
+    print(f"Received encrypted message length: {len(enc_message)}")
+
+    # Decrypt session key and message
     session_key = decrypt_aes_key(enc_session_key, private_key)
+    print(f"Decrypted session key length: {len(session_key)}")
+
     message = decrypt_message(enc_message, session_key)
 
-    print(f"Decrypted message: {message}")
+    if message:
+        print(f"Decrypted message: {message}")
+    else:
+        print("Failed to decrypt the message.")
+
     conn.close()
 
 
